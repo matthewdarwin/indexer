@@ -108,6 +108,7 @@ export class ActionManager {
   }
 
   private async updateActionStatuses(
+    action_ids: number[],
     results: AllocationResult[],
     transaction: Transaction,
   ): Promise<Action[]> {
@@ -122,6 +123,27 @@ export class ActionManager {
         },
         {
           where: { id: result.actionID },
+          returning: true,
+          transaction,
+        },
+      )
+      updatedActions = updatedActions.concat(updatedAction)
+    }
+    // approved actions that did not have an allocation result
+    const resultedActionIDs = results.map((result) => result.actionID)
+    const unfoundActionIDs = action_ids.filter((id) => id in resultedActionIDs)
+
+    // Assume they have failed
+    for (const id of unfoundActionIDs) {
+      const status = ActionStatus.FAILED
+      const [, updatedAction] = await this.models.Action.update(
+        {
+          status: status,
+          transaction: null,
+          failureReason: 'No correlating transaction',
+        },
+        {
+          where: { id },
           returning: true,
           transaction,
         },
@@ -163,7 +185,15 @@ export class ActionManager {
             results,
           })
 
-          updatedActions = await this.updateActionStatuses(results, transaction)
+          updatedActions = await this.updateActionStatuses(
+            approvedActions.map((action) => action.id),
+            results,
+            transaction,
+          )
+
+          this.logger.debug('Completed action statuses update', {
+            updatedActions,
+          })
         } catch (error) {
           this.logger.error(`Failed to execute batch tx on staking contract: ${error}`)
           throw indexerError(IndexerErrorCode.IE072, error)
